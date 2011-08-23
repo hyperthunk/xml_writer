@@ -38,6 +38,52 @@
             eqc:check(P)
     end).
 
+namespace_handling_test_() ->
+    {"Basic namespace handling",
+     setup, fun() -> ok end, fun(_) -> truncate_output() end,
+     [{"Tags should be put into their proper namespace",
+        fun() ->
+            NS = "ns1",
+            NSUri = "http://foo.bar.baz/schemas/2011",
+            Writer = xml_writer:new(fun store_xml/1),
+            WithNS = xml_writer:add_namespace(NS, NSUri, Writer),
+            xml_writer:write_node(NS, "foobar", WithNS),
+            XMLNode = output(),
+            ?assertThat(XMLNode, is_in_namespace(NS, NSUri, "foobar"))
+        end}
+     ]}.
+      %% fun simple_atom_serialisation/1 ]}.
+
+basic_serialisation_test_() ->
+    {"Sanity check basic serialisation doesn't produce invalid XML",
+     setup,
+     fun() ->
+         truncate_output()
+     end,
+     {with, xml_writer:new(fun store_xml/1),
+         [fun simple_binary_serialisation/1,
+          fun simple_atom_serialisation/1]}}.
+
+%%
+%% Custom Hamcrest Matchers
+%%
+
+is_in_namespace(NS, NSUri, NodeName) ->
+    UriAsAtom = list_to_atom(NSUri),
+    fun(Actual) ->
+        case catch(xmerl_scan:string(Actual, [{encoding, latin1}])) of
+            {#xmlElement{
+                expanded_name=ExName,
+                nsinfo={NS, NodeName},
+                namespace=#xmlNamespace{nodes = [{NS,UriAsAtom}]}
+            },_} ->
+                ExName == list_to_atom(NS ++ ":" ++ NodeName);
+            Other ->
+                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
+                false
+        end
+    end.
+
 has_inner_text_value(V) ->
     fun(Actual) ->
         case catch(xmerl_scan:string(Actual, [{encoding, latin1}])) of
@@ -48,39 +94,21 @@ has_inner_text_value(V) ->
         end
     end.
 
-has_value_in_node(Node, Value) ->
-    ?MATCHER(match_named_node_value(Node, Value),
-        {Node, Value}, io_lib:format("A node named ~p, "
-            "containing a value matching ~p~n", [Node, Value])).
-
 match_named_node_value(Node, Value) ->
     fun(Actual) ->
         case catch(xmerl_scan:string(Actual)) of
-            {#xmlElement{name=Name,
-                content=[#xmlText{value=ActualValue}|_]},_} ->
-                list_to_atom(Node) == Name andalso
-                atom_to_list(Value) == (ActualValue ++ "foo");
-            _Other -> false
+            {#xmlElement{name=Node,
+                content=[#xmlText{value=Value}|_]},_} ->
+                true;
+            Other ->
+                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
+                false
         end
     end.
 
-match_node_value(Expected) ->
-    fun(Actual) ->
-        case catch(xmerl_scan:string(Actual)) of
-            {#xmlElement{content=[#xmlText{value=Expected}|_]},_} -> true;
-            _Other -> false
-        end
-    end.
-
-basic_serialisation_test_() ->
-    {"Sanity check basic serialisation doesn't produce invalid XML",
-     setup,
-     fun() ->
-         truncate_output()
-     end,
-     {with, xml_writer:new(fun store_xml/1),
-         [fun simple_binary_serialisation/1]}}.
-      %% fun simple_atom_serialisation/1 ]}.
+%%
+%% Utilities
+%%
 
 store_xml(Xml) ->
     file:write_file(test_data(), Xml, [append]).
@@ -89,31 +117,39 @@ test_data() ->
     filename:join(rebar_utils:get_cwd(), "output.xml").
 
 output() ->
-    {ok, Bin} = file:read_file(test_data()), 
+    {ok, Bin} = file:read_file(test_data()),
     binary_to_list(Bin).
 
 truncate_output() ->
     FName = test_data(),
     {ok, IoDevice} = file:open(FName, [write]),
-    try 
+    try
         ok = file:truncate(IoDevice)
     after
         file:close(IoDevice)
     end,
     FName.
 
+%%
+%% Abstract Test Functions
+%%
+
 simple_atom_serialisation(Writer) ->
-    ?assert(?EQC(?FORALL(Value, atom(),
-        ?IMPLIES(length(atom_to_list(Value)) > 5,
+    ?assert(?EQC(?FORALL(Value, list(integer(97, 122)),
+        ?IMPLIES(length(Value) > 1,
         begin
-            xml_writer:with_element("foo", Writer, fun(W) ->
-                xml_writer:write_value(Value, W)
-            end),
-            ?assertThat(output(), has_inner_text_value(Value))
+            try
+                xml_writer:with_element("foo", Writer, fun(W) ->
+                    xml_writer:write_value(list_to_atom(Value), W)
+                end),
+                assert_that(output(), match_named_node_value(foo, Value))
+            after
+                truncate_output()
+            end
         end)))).
 
 simple_binary_serialisation(Writer) ->
-    ?assert(?EQC(?FORALL(Value, list(integer(64, 255)),
+    ?assert(?EQC(?FORALL(Value, list(integer(97, 122)),
         ?IMPLIES(length(Value) > 1,
         begin
             try

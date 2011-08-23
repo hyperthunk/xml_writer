@@ -35,11 +35,13 @@
 
 -record(ctx, {
     ns          = []        :: list(tuple(string(), string())),
+    ns_stack    = []        :: list(string()),
     stack       = []        :: [tuple(boolean(), tuple(string(), string()))],
     quote       = <<"\"">>  :: binary(),
     prettyprint = false     :: boolean(),
     indent      = <<"\t">>  :: binary(),
     newline     = <<"\n">>  :: binary(),
+    encoding                :: atom(),
     %escapes = [
     %    {<<"\"">>,
     %     {binary:compile_pattern(<<"\"">>),
@@ -62,10 +64,8 @@ file_writer(Path) ->
 
 file_writer(Path, Modes) ->
     {ok, IoDevice} = file:open(Path, Modes),
-    #ctx{
-        write = fun(X) -> file:write(IoDevice, X) end,
-        close = fun(_) -> file:close(IoDevice) end
-    }.
+    #ctx{ write = fun(X) -> file:write(IoDevice, X) end,
+          close = fun(_) -> file:close(IoDevice) end }.
 
 new(WriteFun) ->
     #ctx{ write=WriteFun }.
@@ -75,6 +75,11 @@ new(RootElement, WriteFun) ->
 
 set_option(prettyprint, OnOff, Writer) ->
     Writer#ctx{ prettyprint=OnOff }.
+
+add_namespace(NS, NSUri, Writer=#ctx{ stack=[], ns_stack=NSStack, ns=NSMap }) ->
+    Writer#ctx{ 
+        ns=lists:keystore(NS, 1, NSMap, {NS, NSUri}),
+        ns_stack=[NS|NSStack] }.
 
 start(ElementName, Writer) ->
     start_element(ElementName, Writer).
@@ -95,6 +100,12 @@ with_element(NS, Name, Writer, Fun) ->
     Writer2 = start_element(NS, Name, Writer),
     Writer3 = Fun(Writer2),
     close(Writer3).
+
+write_node(Name, Writer) ->
+    write_node(none, Name, Writer).
+
+write_node(NS, Name, Writer) ->
+    end_element(start_element(NS, Name, Writer)).
 
 write_attributes(AttributeList, Writer) ->
     lists:foldl(fun({Name, Value}, XMLWriter) -> 
@@ -128,10 +139,18 @@ write_sibling(NS, Name, Writer) ->
 start_element(Name, Writer) ->
     start_element(none, Name, Writer).
 
-start_element(NS, Name, Writer) ->
+start_element(NS, Name, Writer=#ctx{ ns=NSMap, ns_stack=NSStack }) ->
     {Writer2, NodeName} = 
         push({NS, Name}, close_current_node(Writer)),
-    write(NodeName, fun start_elem/2, Writer2).
+    WithElem = write(NodeName, fun start_elem/2, Writer2),
+    case NSStack of
+        [] -> WithElem;
+        [_|_] ->
+            XmlnsAtt = 
+                [ setelement(1, lists:keyfind(NSEntry, 1, NSMap),
+                    "xmlns:" ++ NSEntry) || NSEntry <- NSStack ],
+            write_attributes(XmlnsAtt, WithElem)
+    end.
 
 end_element(Writer) ->
     {Writer2, NodeName} = pop(Writer),
@@ -163,10 +182,18 @@ qname(NS, Name) ->
     [NS, <<":">>, Name].
 
 write(Data, Writer=#ctx{ write=WF }) ->
-    WF(Data), Writer.
+    WF(encode(Data, Writer)), Writer.
 
 write(Data, Producer, Writer=#ctx{ write=WF }) ->
-    WF(Producer(Data, Writer)), Writer.
+    WF(Producer(encode(Data, Writer), Writer)), Writer.
+
+encode(Data, #ctx{ encoding=undefined }) when is_atom(Data) ->
+    atom_to_binary(Data, utf8);
+encode(Data, #ctx{ encoding=Encoding }) when is_atom(Data) ->
+    atom_to_binary(Data, Encoding);
+encode(Data, #ctx{ encoding=_ }) ->  %% when is_binary(Data) ->
+    Data.  %% TODO: deal with in/out encoding requirements
+    %% HINT: maybe get this from the Content Type and Disposition headers
 
 start_elem(NodeName, #ctx{ prettyprint=false }) -> 
     [?OPEN_BRACE, NodeName];
