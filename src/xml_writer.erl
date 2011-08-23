@@ -45,7 +45,8 @@
     %     {binary:compile_pattern(<<"\"">>),
     %     <<"\\\"">>}}
     %]
-    write
+    write,
+    close
 }).
 
 -define(OPEN_BRACE, <<"<">>).
@@ -55,6 +56,16 @@
 
 -define(OPEN_ELEM(N), [?OPEN_BRACE, N, ?CLOSE_BRACE]).
 -define(CLOSE_ELEM(N), [?OPEN_BRACE, ?FWD_SLASH, N, ?CLOSE_BRACE]).
+
+file_writer(Path) ->
+    file_writer(Path, [binary, append]).
+
+file_writer(Path, Modes) ->
+    {ok, IoDevice} = file:open(Path, Modes),
+    #ctx{
+        write = fun(X) -> file:write(IoDevice, X) end,
+        close = fun(_) -> file:close(IoDevice) end
+    }.
 
 new(WriteFun) ->
     #ctx{ write=WriteFun }.
@@ -68,8 +79,12 @@ set_option(prettyprint, OnOff, Writer) ->
 start(ElementName, Writer) ->
     start_element(ElementName, Writer).
 
-close(Writer=#ctx{ stack=[] }) ->
-    Writer;
+close(Writer=#ctx{ close=Close, stack=[] }) ->
+    case Close of
+        undefined -> ok;
+        CloseFun when is_function(CloseFun) ->
+            CloseFun(Writer)
+    end;
 close(Writer=#ctx{ stack=[_|_]}) ->
     close(end_element(Writer)).
 
