@@ -39,8 +39,8 @@
     end).
 
 namespace_handling_test_() ->
-    {"Basic namespace handling",
-         [{"Tags should be put into their proper namespace",
+    {"Namespace handling",
+         [{"tags should be put into their proper namespace",
             fun() ->
                 FileId = tmp_file_id(),
                 NS = "ns1",
@@ -52,16 +52,6 @@ namespace_handling_test_() ->
                 ?assertThat(XMLNode, is_in_namespace(NS, NSUri, "foobar"))
                 end
             }]}.
-
-%basic_serialisation_test_() ->
-%    {"A slow test",
-%        {timeout, 60, [{"10s Wait", fun slow/0}]}}.
-
-%slow() ->
-%    slow_thing(10000).
-
-%slow_thing(Slowness) ->
-%    timer:sleep(Slowness).
 
 basic_serialisation_test_() ->
     {"Sanity check basic serialisation doesn't produce invalid XML",
@@ -76,7 +66,7 @@ basic_serialisation_test_() ->
       {"Simple serialisation of an atom",
         ?_assert(?EQC(?FORALL(Value, a_to_z(),
             ?IMPLIES(length(Value) > 1,
-                enforce(fun has_named_value_foo/2, "foo", 
+                enforce(fun has_named_value_foo/2, "foo",
                         tmp_file_id(), Value)))))}
     ]}.
 
@@ -135,6 +125,31 @@ match_named_node_value(Node, Value) ->
     end.
 
 %%
+%% Abstract Test Functions
+%%
+
+has_iodata_content(FileId, _) ->
+    assert_that(output(FileId), has_content_inside(iodata)).
+
+has_named_value_foo(FileId, Value) ->
+    assert_that(output(FileId), match_named_node_value(foo, Value)).
+
+inner_text_value(FileId, Value) ->
+    assert_that(output(FileId), has_inner_text_value(Value)).
+
+enforce(Enforcement, FileId, Value) ->
+    enforce(Enforcement, "data", FileId, Value).
+
+enforce(Enforcement, Elem, FileId, Value) ->
+    if length(Value) > 0 ->
+        Writer = xml_writer:new(store_xml(FileId)),
+        xml_writer:with_element(Elem, Writer, fun(W) ->
+           xml_writer:write_value(Value, W)
+        end),
+        Enforcement(FileId, Value)
+    end.
+
+%%
 %% Utilities
 %%
 
@@ -180,6 +195,7 @@ node_data() ->
     union([a_to_z(), noshrink(non_empty(utf8_binary()))]).
 
 iodata() ->
+    %% TODO: find out whether any new(er) version of PropEr supports iolist()
     %% TODO: relax the matchers so we can remove the noshrink constraints
     union([noshrink(non_empty(list(noshrink(non_empty(list(node_data())))))),
         noshrink(non_empty(list(node_data())))]).
@@ -187,29 +203,3 @@ iodata() ->
 utf8_binary() ->
   ?LET(L, list(a_to_z()),
     unicode:characters_to_binary(L, utf8)).
-
-%%
-%% Abstract Test Functions
-%%
-
-has_iodata_content(FileId, _) ->
-    assert_that(output(FileId), has_content_inside(iodata)).
-
-has_named_value_foo(FileId, Value) ->
-    assert_that(output(FileId), match_named_node_value(foo, Value)).
-
-inner_text_value(FileId, Value) ->
-    assert_that(output(FileId), has_inner_text_value(Value)).
-
-enforce(Enforcement, FileId, Value) ->
-    enforce(Enforcement, "data", FileId, Value).
-
-enforce(Enforcement, Elem, FileId, Value) ->
-    %% why the bloody hell PropEr isn't enforcing the size constraint I do not know. <o>|<0>
-    if length(Value) > 0 ->
-        Writer = xml_writer:new(store_xml(FileId)),
-        xml_writer:with_element(Elem, Writer, fun(W) ->
-           xml_writer:write_value(Value, W)
-        end),
-        Enforcement(FileId, Value)
-    end.
