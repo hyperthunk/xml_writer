@@ -33,36 +33,52 @@
     case code:lib_dir(eqc, include) of
         {error, bad_name} ->
             proper:quickcheck(P,
-                [verbose, {on_output, fun ct:pal/2}, {numtests, 50}]);
+                [verbose, {on_output, fun ct:pal/2}, {numtests, 200}]);
         _ ->
             eqc:check(P)
     end).
 
 namespace_handling_test_() ->
     {"Basic namespace handling",
-     setup, fun() -> ok end, fun(_) -> truncate_output() end,
-     [{"Tags should be put into their proper namespace",
-        fun() ->
-            NS = "ns1",
-            NSUri = "http://foo.bar.baz/schemas/2011",
-            Writer = xml_writer:new(fun store_xml/1),
-            WithNS = xml_writer:add_namespace(NS, NSUri, Writer),
-            xml_writer:write_node(NS, "foobar", WithNS),
-            XMLNode = output(),
-            ?assertThat(XMLNode, is_in_namespace(NS, NSUri, "foobar"))
-        end}
-     ]}.
-      %% fun simple_atom_serialisation/1 ]}.
+         [{"Tags should be put into their proper namespace",
+            fun() ->
+                FileId = tmp_file_id(),
+                NS = "ns1",
+                NSUri = "http://foo.bar.baz/schemas/2011",
+                Writer = xml_writer:new(store_xml(FileId)),
+                WithNS = xml_writer:add_namespace(NS, NSUri, Writer),
+                xml_writer:write_node(NS, "foobar", WithNS),
+                XMLNode = output(FileId),
+                ?assertThat(XMLNode, is_in_namespace(NS, NSUri, "foobar"))
+                end
+            }]}.
+
+%basic_serialisation_test_() ->
+%    {"A slow test",
+%        {timeout, 60, [{"10s Wait", fun slow/0}]}}.
+
+%slow() ->
+%    slow_thing(10000).
+
+%slow_thing(Slowness) ->
+%    timer:sleep(Slowness).
 
 basic_serialisation_test_() ->
     {"Sanity check basic serialisation doesn't produce invalid XML",
-     setup,
-     fun() ->
-         truncate_output()
-     end,
-     {with, xml_writer:new(fun store_xml/1),
-         [fun simple_binary_serialisation/1,
-          fun simple_atom_serialisation/1]}}.
+    [{"Simple serialisation of a (deep) iolist",
+      timeout, 120, ?_assert(?EQC(?FORALL(IoData, iodata(),
+          ?IMPLIES(length(IoData) > 0,
+              enforce(fun has_iodata_content/2, tmp_file_id(), IoData)))))},
+     {"Simple serialisation of a binary",
+        ?_assert(?EQC(?FORALL(Value, a_to_z(),
+            ?IMPLIES(length(Value) > 1,
+                enforce(fun inner_text_value/2, tmp_file_id(), Value)))))},
+      {"Simple serialisation of an atom",
+        ?_assert(?EQC(?FORALL(Value, a_to_z(),
+            ?IMPLIES(length(Value) > 1,
+                enforce(fun has_named_value_foo/2, "foo", 
+                        tmp_file_id(), Value)))))}
+    ]}.
 
 %%
 %% Custom Hamcrest Matchers
@@ -94,6 +110,18 @@ has_inner_text_value(V) ->
         end
     end.
 
+has_content_inside(_Node) ->
+    fun(Actual) ->
+        case catch(xmerl_scan:string(Actual)) of
+            {#xmlElement{
+                content=[#xmlText{value=Value}|_]},_} ->
+                length(Value) > 0;
+            Other ->
+                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
+                false
+        end
+    end.
+
 match_named_node_value(Node, Value) ->
     fun(Actual) ->
         case catch(xmerl_scan:string(Actual)) of
@@ -110,54 +138,78 @@ match_named_node_value(Node, Value) ->
 %% Utilities
 %%
 
-store_xml(Xml) ->
-    file:write_file(test_data(), Xml, [append]).
+tmp_file_id() ->
+    Val = case get(current) of
+        undefined ->
+            put(current, random:uniform(1000000)),
+            get(current);
+        Other ->
+            NextVal = Other + 1,
+            put(current, NextVal), NextVal
+    end,
+    integer_to_list(Val).
 
-test_data() ->
-    filename:join(rebar_utils:get_cwd(), "output.xml").
+store_xml(FileId) ->
+    fun(Xml) ->
+        case file:write_file(test_data(FileId), Xml, [append]) of
+            ok -> ok;
+            Other ->
+                ct:pal("Unable to write: ~p~n", [Other])
+        end
+    end.
 
-output() ->
-    {ok, Bin} = file:read_file(test_data()),
+test_data(FileId) ->
+    filename:join([rebar_utils:get_cwd(),
+        string:join(["output", FileId, "xml"], ".")]).
+
+output(FileId) ->
+    {ok, Bin} = file:read_file(test_data(FileId)),
     binary_to_list(Bin).
 
-truncate_output() ->
-    FName = test_data(),
-    {ok, IoDevice} = file:open(FName, [write]),
-    try
-        ok = file:truncate(IoDevice)
-    after
-        file:close(IoDevice)
-    end,
-    FName.
+%%
+%% PropEr Type Definitions
+%%
+
+a_to_z() ->
+    %% NB: make sure xmerl (which we're using in the matchers)
+    %% doesn't fall on it's backside complaining about encodings and so on
+    %% TODO: this is far too conservative, so we'll need to broaden it later
+    non_empty(list(integer(97, 122))).
+
+node_data() ->
+    union([a_to_z(), noshrink(non_empty(utf8_binary()))]).
+
+iodata() ->
+    %% TODO: relax the matchers so we can remove the noshrink constraints
+    union([noshrink(non_empty(list(noshrink(non_empty(list(node_data())))))),
+        noshrink(non_empty(list(node_data())))]).
+
+utf8_binary() ->
+  ?LET(L, list(a_to_z()),
+    unicode:characters_to_binary(L, utf8)).
 
 %%
 %% Abstract Test Functions
 %%
 
-simple_atom_serialisation(Writer) ->
-    ?assert(?EQC(?FORALL(Value, list(integer(97, 122)),
-        ?IMPLIES(length(Value) > 1,
-        begin
-            try
-                xml_writer:with_element("foo", Writer, fun(W) ->
-                    xml_writer:write_value(list_to_atom(Value), W)
-                end),
-                assert_that(output(), match_named_node_value(foo, Value))
-            after
-                truncate_output()
-            end
-        end)))).
+has_iodata_content(FileId, _) ->
+    assert_that(output(FileId), has_content_inside(iodata)).
 
-simple_binary_serialisation(Writer) ->
-    ?assert(?EQC(?FORALL(Value, list(integer(97, 122)),
-        ?IMPLIES(length(Value) > 1,
-        begin
-            try
-                xml_writer:with_element("foo", Writer, fun(W) ->
-                    xml_writer:write_value(Value, W)
-                end),
-                assert_that(output(), has_inner_text_value(Value))
-            after
-                truncate_output()
-            end
-        end)))).
+has_named_value_foo(FileId, Value) ->
+    assert_that(output(FileId), match_named_node_value(foo, Value)).
+
+inner_text_value(FileId, Value) ->
+    assert_that(output(FileId), has_inner_text_value(Value)).
+
+enforce(Enforcement, FileId, Value) ->
+    enforce(Enforcement, "data", FileId, Value).
+
+enforce(Enforcement, Elem, FileId, Value) ->
+    %% why the bloody hell PropEr isn't enforcing the size constraint I do not know. <o>|<0>
+    if length(Value) > 0 ->
+        Writer = xml_writer:new(store_xml(FileId)),
+        xml_writer:with_element(Elem, Writer, fun(W) ->
+           xml_writer:write_value(Value, W)
+        end),
+        Enforcement(FileId, Value)
+    end.
