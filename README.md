@@ -8,4 +8,4 @@ xml_writer is released under a permissive, BSD like license.
 
 ## Versioning
 
-xml_writer releases will conform to [Semantic Versioning](http://semver.org).
+xml_writer releases will conform to [Semantic Versioning](http://semver.org), at least by the time it hits 1.0.0.
