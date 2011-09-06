@@ -2,6 +2,11 @@
 
 Work in progress.
 
+## Compiling/Testing
+
+You can compile xml_writer using `rebar clean compile`, optionally running `rebar get-deps` first to obtain dependencies
+which are required for testing. Tests can be run with `rebar skip_deps=true clean eunit -v`.
+
 ## License
 
 xml_writer is released under a permissive, BSD like license.
