@@ -1,4 +1,4 @@
-# xml_writer - An Erlang XML Serialisation API
+# xml_writer - An Erlang XML Serialisation API [![travis](https://secure.travis-ci.org/hyperthunk/xml_writer.png)](http://travis-ci.org/hyperthunk/xml_writer)
 
 Work in progress.
 
