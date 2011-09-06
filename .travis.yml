@@ -1,3 +1,5 @@
 language: erlang
-before_script: "make clean"
-script: "make test"
+otp_release:
+   - R14B01
+before_script: "./rebar get-deps compile"
+script: "./rebar skip_deps=true eunit"
