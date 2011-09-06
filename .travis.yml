@@ -1,0 +1,3 @@
+language: erlang
+before_script: "make clean"
+script: "make test"
