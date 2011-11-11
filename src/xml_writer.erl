@@ -48,6 +48,7 @@
     %     <<"\\\"">>}}
     %]
     write,
+    format,
     close
 }).
 
@@ -65,6 +66,7 @@ file_writer(Path) ->
 file_writer(Path, Modes) ->
     {ok, IoDevice} = file:open(Path, Modes),
     #ctx{ write = fun(X) -> file:write(IoDevice, X) end,
+          format = fun(M, A, _) -> io:format(IoDevice, M, A) end,
           close = fun(_) -> file:close(IoDevice) end }.
 
 new(WriteFun) ->
@@ -77,7 +79,7 @@ set_option(prettyprint, OnOff, Writer) ->
     Writer#ctx{ prettyprint=OnOff }.
 
 add_namespace(NS, NSUri, Writer=#ctx{ stack=[], ns_stack=NSStack, ns=NSMap }) ->
-    Writer#ctx{ 
+    Writer#ctx{
         ns=lists:keystore(NS, 1, NSMap, {NS, NSUri}),
         ns_stack=[NS|NSStack] }.
 
@@ -108,8 +110,8 @@ write_node(NS, Name, Writer) ->
     end_element(start_element(NS, Name, Writer)).
 
 write_attributes(AttributeList, Writer) ->
-    lists:foldl(fun({Name, Value}, XMLWriter) -> 
-        write_attribute(Name, Value, XMLWriter) 
+    lists:foldl(fun({Name, Value}, XMLWriter) ->
+        write_attribute(Name, Value, XMLWriter)
     end, Writer, AttributeList).
 
 write_attribute(Name, Value, Writer) ->
@@ -140,13 +142,13 @@ start_element(Name, Writer) ->
     start_element(none, Name, Writer).
 
 start_element(NS, Name, Writer=#ctx{ ns=NSMap, ns_stack=NSStack }) ->
-    {Writer2, NodeName} = 
+    {Writer2, NodeName} =
         push({NS, Name}, close_current_node(Writer)),
     WithElem = write(NodeName, fun start_elem/2, Writer2),
     case NSStack of
         [] -> WithElem;
         [_|_] ->
-            XmlnsAtt = 
+            XmlnsAtt =
                 [ setelement(1, lists:keyfind(NSEntry, 1, NSMap),
                     "xmlns:" ++ NSEntry) || NSEntry <- NSStack ],
             write_attributes(XmlnsAtt, WithElem)
@@ -181,6 +183,14 @@ qname(none, Name) ->
 qname(NS, Name) ->
     [NS, <<":">>, Name].
 
+format(Msg, Args, Writer=#ctx{ format=undefined }) ->
+    write(io_lib:format(Msg, Args), Writer);
+format(Msg, Args, Writer=#ctx{ format=Format }) when is_function(Format, 2) ->
+    write(Format(Msg, Args), Writer);
+format(Msg, Args, Writer=#ctx{ format=Format }) when is_function(Format, 3) ->
+    Format(Msg, Args),
+    Writer.
+
 write(Data, Writer=#ctx{ write=WF }) ->
     WF(encode(Data, Writer)), Writer.
 
@@ -195,10 +205,10 @@ encode(Data, #ctx{ encoding=_ }) ->  %% when is_binary(Data) ->
     Data.  %% TODO: deal with in/out encoding requirements
     %% HINT: maybe get this from the Content Type and Disposition headers
 
-start_elem(NodeName, #ctx{ prettyprint=false }) -> 
+start_elem(NodeName, #ctx{ prettyprint=false }) ->
     [?OPEN_BRACE, NodeName];
-start_elem(NodeName, #ctx{ stack=S, prettyprint=true, indent=I, newline=NL }) -> 
+start_elem(NodeName, #ctx{ stack=S, prettyprint=true, indent=I, newline=NL }) ->
     [NL, lists:duplicate(length(S), I), ?OPEN_BRACE, NodeName].
 
-end_elem(NodeName, _) -> 
+end_elem(NodeName, _) ->
     [?OPEN_BRACE, ?FWD_SLASH, NodeName, ?CLOSE_BRACE].
