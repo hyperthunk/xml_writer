@@ -66,7 +66,7 @@ file_writer(Path) ->
 file_writer(Path, Modes) ->
     {ok, IoDevice} = file:open(Path, Modes),
     #ctx{ write = fun(X) -> file:write(IoDevice, X) end,
-          format = fun(M, A, _) -> io:format(IoDevice, M, A) end,
+          format = fun(M, A, W) -> io:format(IoDevice, M, A), W end,
           close = fun(_) -> file:close(IoDevice) end }.
 
 new(WriteFun) ->
