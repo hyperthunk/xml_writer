@@ -28,7 +28,8 @@
 %%
 %% @doc XML Serialiser
 %%
-%% This plugin allows you to serialise an XML document using a simple API.
+%% This plugin allows you to generate an XML document using a simple, 
+%% dom-like API.
 %% -----------------------------------------------------------------------------
 -module(xml_writer).
 -compile(export_all).

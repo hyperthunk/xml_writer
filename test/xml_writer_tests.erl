@@ -29,46 +29,22 @@
 -include_lib("hamcrest/include/hamcrest.hrl").
 -include_lib("xmerl/include/xmerl.hrl").
 
--define(EQC(P),
-    case code:lib_dir(eqc, include) of
-        {error, bad_name} ->
-            proper:quickcheck(P,
-                [verbose, {on_output, fun ct:pal/2}, {numtests, 200}]);
-        _ ->
-            eqc:check(P)
-    end).
-
 namespace_handling_test_() ->
     {"Namespace handling",
          [{"tags should be put into their proper namespace",
             fun() ->
-                FileId = tmp_file_id(),
+                FileId = test_helper:tmp_file_id(),
                 NS = "ns1",
                 NSUri = "http://foo.bar.baz/schemas/2011",
-                Writer = xml_writer:new(store_xml(FileId)),
+                Writer = xml_writer:file_writer(FileId),
                 WithNS = xml_writer:add_namespace(NS, NSUri, Writer),
-                xml_writer:write_node(NS, "foobar", WithNS),
-                XMLNode = output(FileId),
+                FinalNode = xml_writer:write_node(NS, "foobar", WithNS),
+                xml_writer:close(FinalNode),
+                {ok, Bin} = file:read_file(FileId),
+                XMLNode = binary_to_list(Bin),
                 ?assertThat(XMLNode, is_in_namespace(NS, NSUri, "foobar"))
                 end
             }]}.
-
-basic_serialisation_test_() ->
-    {"Sanity check basic serialisation doesn't produce invalid XML",
-    [{"Simple serialisation of a (deep) iolist",
-      timeout, 120, ?_assert(?EQC(?FORALL(IoData, iodata(),
-          ?IMPLIES(length(IoData) > 0,
-              enforce(fun has_iodata_content/2, tmp_file_id(), IoData)))))},
-     {"Simple serialisation of a binary",
-        ?_assert(?EQC(?FORALL(Value, a_to_z(),
-            ?IMPLIES(length(Value) > 1,
-                enforce(fun inner_text_value/2, tmp_file_id(), Value)))))},
-      {"Simple serialisation of an atom",
-        ?_assert(?EQC(?FORALL(Value, a_to_z(),
-            ?IMPLIES(length(Value) > 1,
-                enforce(fun has_named_value_foo/2, "foo",
-                        tmp_file_id(), Value)))))}
-    ]}.
 
 %%
 %% Custom Hamcrest Matchers
@@ -85,121 +61,7 @@ is_in_namespace(NS, NSUri, NodeName) ->
             },_} ->
                 ExName == list_to_atom(NS ++ ":" ++ NodeName);
             Other ->
-                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
+                rebar_log:log(warn, "Parsing ~p failed: ~p~n", [Actual, Other]),
                 false
         end
     end.
-
-has_inner_text_value(V) ->
-    fun(Actual) ->
-        case catch(xmerl_scan:string(Actual, [{encoding, latin1}])) of
-            {#xmlElement{content=[#xmlText{value=V}|_]},_} -> true;
-            Other ->
-                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
-                false
-        end
-    end.
-
-has_content_inside(_Node) ->
-    fun(Actual) ->
-        case catch(xmerl_scan:string(Actual)) of
-            {#xmlElement{
-                content=[#xmlText{value=Value}|_]},_} ->
-                length(Value) > 0;
-            Other ->
-                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
-                false
-        end
-    end.
-
-match_named_node_value(Node, Value) ->
-    fun(Actual) ->
-        case catch(xmerl_scan:string(Actual)) of
-            {#xmlElement{name=Node,
-                content=[#xmlText{value=Value}|_]},_} ->
-                true;
-            Other ->
-                ct:pal("Parsing ~p failed: ~p~n", [Actual, Other]),
-                false
-        end
-    end.
-
-%%
-%% Abstract Test Functions
-%%
-
-has_iodata_content(FileId, _) ->
-    assert_that(output(FileId), has_content_inside(iodata)).
-
-has_named_value_foo(FileId, Value) ->
-    assert_that(output(FileId), match_named_node_value(foo, Value)).
-
-inner_text_value(FileId, Value) ->
-    assert_that(output(FileId), has_inner_text_value(Value)).
-
-enforce(Enforcement, FileId, Value) ->
-    enforce(Enforcement, "data", FileId, Value).
-
-enforce(Enforcement, Elem, FileId, Value) ->
-    if length(Value) > 0 ->
-        Writer = xml_writer:new(store_xml(FileId)),
-        xml_writer:with_element(Elem, Writer, fun(W) ->
-           xml_writer:write_value(Value, W)
-        end),
-        Enforcement(FileId, Value)
-    end.
-
-%%
-%% Utilities
-%%
-
-tmp_file_id() ->
-    Val = case get(current) of
-        undefined ->
-            put(current, random:uniform(1000000)),
-            get(current);
-        Other ->
-            NextVal = Other + 1,
-            put(current, NextVal), NextVal
-    end,
-    integer_to_list(Val).
-
-store_xml(FileId) ->
-    fun(Xml) ->
-        case file:write_file(test_data(FileId), Xml, [append]) of
-            ok -> ok;
-            Other ->
-                ct:pal("Unable to write: ~p~n", [Other])
-        end
-    end.
-
-test_data(FileId) ->
-    filename:join([rebar_utils:get_cwd(),
-        string:join(["output", FileId, "xml"], ".")]).
-
-output(FileId) ->
-    {ok, Bin} = file:read_file(test_data(FileId)),
-    binary_to_list(Bin).
-
-%%
-%% PropEr Type Definitions
-%%
-
-a_to_z() ->
-    %% NB: make sure xmerl (which we're using in the matchers)
-    %% doesn't fall on it's backside complaining about encodings and so on
-    %% TODO: this is far too conservative, so we'll need to broaden it later
-    non_empty(list(integer(97, 122))).
-
-node_data() ->
-    union([a_to_z(), noshrink(non_empty(utf8_binary()))]).
-
-iodata() ->
-    %% TODO: find out whether any new(er) version of PropEr supports iolist()
-    %% TODO: relax the matchers so we can remove the noshrink constraints
-    union([noshrink(non_empty(list(noshrink(non_empty(list(node_data())))))),
-        noshrink(non_empty(list(node_data())))]).
-
-utf8_binary() ->
-  ?LET(L, list(a_to_z()),
-    unicode:characters_to_binary(L, utf8)).
