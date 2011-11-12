@@ -1,5 +1,5 @@
 language: erlang
 otp_release:
    - R14B01
-before_script: "./rebar compile -v"
-script: "./rebar skip_deps=true eunit -v"
+before_script: "./rebar get-deps compile -v"
+script: "./rebar skip_deps=true eunit qc -v"
