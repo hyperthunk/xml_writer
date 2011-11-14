@@ -29,7 +29,7 @@
 -include_lib("hamcrest/include/hamcrest.hrl").
 -include_lib("xmerl/include/xmerl.hrl").
 
-namespace_handling_test_() ->
+namespace_handling_test_xx() ->
     {"Namespace handling",
          [{"tags should be put into their proper namespace",
             fun() ->

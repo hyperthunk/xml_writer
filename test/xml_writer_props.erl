@@ -25,23 +25,48 @@
 -include_lib("hamcrest/include/hamcrest.hrl").
 -include_lib("xmerl/include/xmerl.hrl").
 
-prop_iolist_serialisation() ->
+-compile(export_all).
+
+%%
+%% Properties
+%%
+
+x_prop_basic_iolist_serialisation() ->
     ?FORALL(IoData, iodata(),
           ?IMPLIES(length(IoData) > 0,
               enforce(fun has_iodata_content/2,
                     test_helper:tmp_file_id(), IoData))).
 
-prop_binary_serialisation() ->
+x_prop_basic_binary_serialisation() ->
     ?FORALL(Value, a_to_z(),
         ?IMPLIES(length(Value) > 1,
             enforce(fun inner_text_value/2,
                     test_helper:tmp_file_id(), Value))).
 
-prop_atom_serialisation() ->
+x_prop_basic_atom_serialisation() ->
     ?FORALL(Value, a_to_z(),
         ?IMPLIES(length(Value) > 1,
             enforce(fun has_named_value_foo/2, "foo",
                     test_helper:tmp_file_id(), Value))).
+
+x_prop_format_floating_point_numbers() ->
+    ?FORALL(F, float(),
+        begin
+            File = filename:join(".test", test_helper:tmp_file_id()),
+            io:format("Writing to ~s~n", [filename:join(rebar_utils:get_cwd(), File)]),
+            Writer = xml_writer:file_writer(File, [write]),
+            Writer2 = xml_writer:with_element("price", Writer,
+                fun(W) ->
+                    W = xml_writer:format("~f", [F], W),
+                    io:format("W = ~p~n", [W]),
+                    W
+                end
+            ),
+            io:format("Writer2 = ~p~n", [Writer2]),
+            xml_writer:close(Writer2),
+            inner_text_value(File, F)
+        end
+    ).
 
 %%
 %% Custom Hamcrest Matchers

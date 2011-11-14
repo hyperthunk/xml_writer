@@ -1,8 +1,5 @@
 %% -----------------------------------------------------------------------------
-%%
-%% xml_writer
-%%
-%% Copyright (c) 2011 Tim Watson (watson.timothy@gmail.com)
+%% Copyright (c) 2002-2011 Tim Watson (watson.timothy@gmail.com)
 %%
 %% Permission is hereby granted, free of charge, to any person obtaining a copy
 %% of this software and associated documentation files (the "Software"), to deal
@@ -22,194 +19,95 @@
 %% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 %% THE SOFTWARE.
 %% -----------------------------------------------------------------------------
-%% @author Tim Watson [http://hyperthunk.wordpress.com]
-%% @copyright (c) Tim Watson, 2011
-%% @since: August 2011
-%%
-%% @doc XML Serialiser
-%%
-%% This plugin allows you to generate an XML document using a simple, 
-%% dom-like API.
-%% -----------------------------------------------------------------------------
 -module(xml_writer).
--compile(export_all).
+-behaviour(gen_fsm).
 
--record(ctx, {
-    ns          = []        :: list(tuple(string(), string())),
-    ns_stack    = []        :: list(string()),
-    stack       = []        :: [tuple(boolean(), tuple(string(), string()))],
-    quote       = <<"\"">>  :: binary(),
-    prettyprint = false     :: boolean(),
-    indent      = <<"\t">>  :: binary(),
-    newline     = <<"\n">>  :: binary(),
-    encoding                :: atom(),
-    %escapes = [
-    %    {<<"\"">>,
-    %     {binary:compile_pattern(<<"\"">>),
-    %     <<"\\\"">>}}
-    %]
-    write,
-    format,
-    close
-}).
+%% API exports
+-export([new/1, new/2, close/1]).
+-export([write_value/2, start_element/2, end_element/1]).
 
--define(OPEN_BRACE, <<"<">>).
--define(FWD_SLASH, <<"/">>).
--define(CLOSE_BRACE, <<">">>).
--define(SPACE, <<" ">>).
+%% gen_fsm state-name exports
+-export([waiting_for_input/3, element_started/3]).
 
--define(OPEN_ELEM(N), [?OPEN_BRACE, N, ?CLOSE_BRACE]).
--define(CLOSE_ELEM(N), [?OPEN_BRACE, ?FWD_SLASH, N, ?CLOSE_BRACE]).
+%% gen_fsm behaviour exports
+-export([init/1,
+         handle_sync_event/4,
+         terminate/3,
+         handle_event/3,
+         handle_info/3,
+         code_change/4]).
 
-file_writer(Path) ->
-    file_writer(Path, [binary, append]).
+-include("xml_writer.hrl").
 
-file_writer(Path, Modes) ->
-    {ok, IoDevice} = file:open(Path, Modes),
-    #ctx{ write = fun(X) -> file:write(IoDevice, X) end,
-          format = fun(M, A, W) -> io:format(IoDevice, M, A), W end,
-          close = fun(_) -> file:close(IoDevice) end }.
+%%
+%% API
+%%
 
+-spec new(name(), write_function()) -> writer().
+new(Name, WriteFun) ->
+    {ok, _Pid} = gen_fsm:start({local, Name}, ?MODULE, [WriteFun], []),
+    Name.
+
+-spec new(write_function()) -> writer().
 new(WriteFun) ->
-    #ctx{ write=WriteFun }.
+    {ok, Pid} = gen_fsm:start(?MODULE, [WriteFun], []),
+    Pid.
 
-new(RootElement, WriteFun) ->
-    start(RootElement, new(WriteFun)).
+- spec close(writer()) -> term().
+close(Writer) ->
+    gen_fsm:sync_send_all_state_event(Writer, stop).
 
-set_option(prettyprint, OnOff, Writer) ->
-    Writer#ctx{ prettyprint=OnOff }.
+-spec write_value(writer(), iodata()) -> 'ok' | {'error', term()}.
+write_value(Writer, Value) ->
+    gen_fsm:sync_send_event(Writer, {write_value, Value}).
 
-add_namespace(NS, NSUri, Writer=#ctx{ stack=[], ns_stack=NSStack, ns=NSMap }) ->
-    Writer#ctx{
-        ns=lists:keystore(NS, 1, NSMap, {NS, NSUri}),
-        ns_stack=[NS|NSStack] }.
+-spec start_element(writer(), element_name()) -> ok.
+start_element(Writer, ElementName) ->
+    gen_fsm:sync_send_event(Writer, {start_element, ElementName}).
 
-start(ElementName, Writer) ->
-    start_element(ElementName, Writer).
-
-close(Writer=#ctx{ close=Close, stack=[] }) ->
-    case Close of
-        undefined -> ok;
-        CloseFun when is_function(CloseFun) ->
-            CloseFun(Writer)
-    end;
-close(Writer=#ctx{ stack=[_|_]}) ->
-    close(end_element(Writer)).
-
-with_element(Name, Writer, Fun) ->
-    with_element(none, Name, Writer, Fun).
-
-with_element(NS, Name, Writer, Fun) ->
-    Writer2 = start_element(NS, Name, Writer),
-    Writer3 = Fun(Writer2),
-    close(Writer3).
-
-write_node(Name, Writer) ->
-    write_node(none, Name, Writer).
-
-write_node(NS, Name, Writer) ->
-    end_element(start_element(NS, Name, Writer)).
-
-write_attributes(AttributeList, Writer) ->
-    lists:foldl(fun({Name, Value}, XMLWriter) ->
-        write_attribute(Name, Value, XMLWriter)
-    end, Writer, AttributeList).
-
-write_attribute(Name, Value, Writer) ->
-    write_attribute(none, Name, Value, Writer).
-
-write_attribute(NS, Name, Value, Writer=#ctx{ quote=Quot }) ->
-    write([?SPACE, qname(NS, Name), <<"=">>, Quot, Value, Quot], Writer).
-
-write_value(_, #ctx{ stack=[] }) ->
-    throw({error, no_root_element});
-write_value(Value, Writer) ->
-    write(Value, close_current_node(Writer)).
-
-write_child(Name, Writer) ->
-    write_child(none, Name, Writer).
-
-write_child(NS, Name, Writer) ->
-    start_element(NS, Name, Writer).
-
-write_sibling(Name, Writer) ->
-    write_sibling(none, Name, Writer).
-
-write_sibling(NS, Name, Writer) ->
-    Writer2 = end_element(Writer),
-    start_element(NS, Name, Writer2).
-
-start_element(Name, Writer) ->
-    start_element(none, Name, Writer).
-
-start_element(NS, Name, Writer=#ctx{ ns=NSMap, ns_stack=NSStack }) ->
-    {Writer2, NodeName} =
-        push({NS, Name}, close_current_node(Writer)),
-    WithElem = write(NodeName, fun start_elem/2, Writer2),
-    case NSStack of
-        [] -> WithElem;
-        [_|_] ->
-            XmlnsAtt =
-                [ setelement(1, lists:keyfind(NSEntry, 1, NSMap),
-                    "xmlns:" ++ NSEntry) || NSEntry <- NSStack ],
-            write_attributes(XmlnsAtt, WithElem)
-    end.
-
+-spec end_element(writer()) -> 'ok'.
 end_element(Writer) ->
-    {Writer2, NodeName} = pop(Writer),
-    write(NodeName, fun end_elem/2, Writer2).
+    gen_fsm:sync_send_event(Writer, end_element).
 
-push(Scope={NS, N}, W=#ctx{ stack=Stack }) ->
-    W2 = W#ctx{ stack=[{false, Scope}|Stack] },
-    %% io:format("Pushing ~p~n", [N]),
-    {W2, qname(NS, N)}.
+%%
+%% gen_fsm callbacks
+%%
 
-pop(#ctx{ stack=[] }) ->
-    throw({error, empty_stack});
-pop(W=#ctx{ stack=[{false, _}|_] }) ->
-    pop(close_current_node(W));
-pop(W=#ctx{ stack=[{true, {NS, N}}|T] }) ->
-    {W#ctx{ stack=T }, qname(NS, N)}.
+init([Writer]) ->
+    {ok, waiting_for_input, #writer{ write=Writer }}.
 
-close_current_node(W=#ctx{ stack=[] }) ->
-    W;
-close_current_node(W=#ctx{ stack=[{true, _}|_] }) ->
-    W;
-close_current_node(W=#ctx{ write=WF, stack=[{false, Node}|Stack] }) ->
-    WF(?CLOSE_BRACE),
-    W#ctx{ stack=[{true, Node}|Stack] }.
+waiting_for_input({write_value, _}, From, W=#writer{ stack=[] }) ->
+    {reply, {error, no_root_node}, waiting_for_input, W};
+waiting_for_input({start_element, ElementName},
+                    From, W=#writer{ stack=Stack }) ->
+    gen_fsm:reply(From, ok),
+    {next_state, element_started,
+        W#writer{ stack=[#stack_frame{ local_name=ElementName }|Stack] }}.
 
-qname(none, Name) ->
-    Name;
-qname(NS, Name) ->
-    [NS, <<":">>, Name].
+element_started(end_element, _From, Writer) ->
+    {reply, ok, waiting_for_input, pop(Writer)}.
 
-format(Msg, Args, Writer=#ctx{ format=undefined }) ->
-    write(io_lib:format(Msg, Args), Writer);
-format(Msg, Args, Writer=#ctx{ format=Format }) when is_function(Format, 2) ->
-    write(Format(Msg, Args), Writer);
-format(Msg, Args, Writer=#ctx{ format=Format }) when is_function(Format, 3) ->
-    Format(Msg, Args),
-    Writer.
+handle_sync_event(stop, _From, _StateName, _StateData) ->
+    {stop, normal, ok, []}.
 
-write(Data, Writer=#ctx{ write=WF }) ->
-    WF(encode(Data, Writer)), Writer.
+terminate(_Reason, _StateName, _StateData) ->
+    ok.
 
-write(Data, Producer, Writer=#ctx{ write=WF }) ->
-    WF(Producer(encode(Data, Writer), Writer)), Writer.
+handle_event(_Event, StateName, StateData) ->
+    {next_state, StateName, StateData}.
 
-encode(Data, #ctx{ encoding=undefined }) when is_atom(Data) ->
-    atom_to_binary(Data, utf8);
-encode(Data, #ctx{ encoding=Encoding }) when is_atom(Data) ->
-    atom_to_binary(Data, Encoding);
-encode(Data, #ctx{ encoding=_ }) ->  %% when is_binary(Data) ->
-    Data.  %% TODO: deal with in/out encoding requirements
-    %% HINT: maybe get this from the Content Type and Disposition headers
+handle_info(_Info, _StateName, _StateData) ->
+    ok.
 
-start_elem(NodeName, #ctx{ prettyprint=false }) ->
-    [?OPEN_BRACE, NodeName];
-start_elem(NodeName, #ctx{ stack=S, prettyprint=true, indent=I, newline=NL }) ->
-    [NL, lists:duplicate(length(S), I), ?OPEN_BRACE, NodeName].
+code_change(_OldVsn, StateName, StateData, _Extra) ->
+    {ok, StateName, StateData}.
 
-end_elem(NodeName, _) ->
-    [?OPEN_BRACE, ?FWD_SLASH, NodeName, ?CLOSE_BRACE].
+%%
+%% Internal API
+%%
+
+pop(Writer=#writer{ stack=[] }) ->
+    Writer;
+pop(Writer=#writer{ stack=[_|Rest] }) ->
+    Writer#writer{ stack=Rest }.
+
