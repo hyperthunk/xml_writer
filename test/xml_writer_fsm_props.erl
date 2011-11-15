@@ -34,25 +34,38 @@
 %% fsm transitions
 %%
 
-waiting_for_input(#writer{}=W) ->
+waiting_for_input(_W) ->
+    %% TODO: loosen up the type constraints here....
      [{history,
-        {call, xml_writer, write_value, [?MODULE, binary()]}},
+         {call, xml_writer, add_namespace,
+             [?MODULE, 
+                 test_helper:namespace_prefix(),
+                 test_helper:url()]}},
+      {history,
+        {call, xml_writer, write_value, 
+            [?MODULE, test_helper:valid_latin_string()]}},
       {element_started,
-        {call, xml_writer, start_element, [?MODULE, binary()]}}].
+        {call, xml_writer, start_element, 
+            [?MODULE, test_helper:valid_latin_string()]}}].
 
-element_started(W) ->
+element_started(_W) ->
     [{waiting_for_input, {call, xml_writer, end_element, [?MODULE]}}].
 
 initial_state() -> waiting_for_input.
 
 initial_state_data() -> #writer{}.
 
+next_state_data(_, _, S,
+                _Result, {call, xml_writer, add_namespace, [_, NS, NSUri]}) ->
+    {_, _, _, S2} = xml_writer:waiting_for_input({add_namespace, 
+                                                    NS, NSUri}, undefined, S),
+    S2;
 next_state_data(waiting_for_input, element_started, S,
-                Result, {call, xml_writer, start_element, [_, Elem]}=Call) ->
+                _Result, {call, xml_writer, start_element, [_, Elem]}) ->
     S#writer{ stack=[#stack_frame{ local_name=Elem }|S#writer.stack] };
-next_state_data(From, Target, StateData, Result, {call, _, _, _}=Call) ->
-    ct:pal("From = ~p, Target = ~p, StateData = ~p, Result = ~p, Call = ~p~n",
-            [From, Target, StateData, Result, Call]),
+next_state_data(_From, _Target, StateData, _Result, {call, _, _, _}) ->
+%    ct:pal("From = ~p, Target = ~p, StateData = ~p, Result = ~p, Call = ~p~n",
+%            [From, Target, StateData, Result, Call]),
     StateData.
 
 %precondition(waiting_for_input, _, W, {call, _, write_value, _}) ->
@@ -78,25 +91,31 @@ next_state_data(From, Target, StateData, Result, {call, _, _, _}=Call) ->
 precondition(_From, _Target, _StateData, {call ,_,_,_}) ->
     true.
 
+postcondition(waiting_for_input, _, _,
+                {call, _, add_namespace, _}, Result) ->
+%    FoundNS = lists:keyfind(NS, 1, W#writer.ns),
+%    error_logger:info_msg("FoundNS: ~p in ~p~n", [FoundNS, W]),
+%    FoundNS == {NS, NSUri} andalso
+    Result =:= ok;
 postcondition(waiting_for_input, _, #writer{stack=[]},
                 {call, _, write_value, _}, Result) ->
     Result == {error, no_root_node};
 postcondition(element_started, waiting_for_input,
-                W, {call, _, _, _}=Call, Result) ->
-%    ct:pal("W = ~p, Call = ~p, Result = ~p~n",
-%                [W,Call, Result]),
+                W, {call, _, _, _}, _Result) ->
     length(W#writer.stack) > 0;
 postcondition(_, _, _, _, _) ->
     true.
 
-%weight(_Today, _Tomorrow, {call,_,new_day,_}) -> 1;
-%weight(_Today, _Today, {call,_,hungry,_}) -> 3;
-%weight(_Today, _Today, {call,_,buy,_}) -> 2.
+weight(_OldState, _NewState, {call,_, add_namespace, _}) -> 5;
+weight(_, _, _) -> 1.
 
 prop_all_state_transitions_are_valid() ->
     ?FORALL(Cmds, proper_fsm:commands(?MODULE),
         begin
-        Writer = xml_writer:new(?MODULE, fun io:format/2),
+        Path = filename:join([rebar_utils:get_cwd(), ".test",
+                                atom_to_list(?MODULE)]),
+        filelib:ensure_dir(Path),
+        Writer = xml_writer:new(?MODULE, fun(_) -> ok end),
         {History, State, Result} =
             proper_fsm:run_commands(?MODULE, Cmds),
         xml_writer:close(Writer),

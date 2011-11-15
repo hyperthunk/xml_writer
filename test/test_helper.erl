@@ -22,6 +22,22 @@
 -module(test_helper).
 -compile(export_all).
 
+-include_lib("proper/include/proper.hrl").
+
+%%
+%% PropEr Types
+%%
+
+valid_latin_string() ->
+    non_empty(list(proper_stdgen:latin_char())).
+
+url() ->
+    ?LET({Host, Label}, {proper_stdgen:hostname(), proper_stdgen:label()},
+        "http://" ++ Host ++ "/" ++ Label).
+
+namespace_prefix() ->
+    ?SIZED(3, non_empty(list(proper_stdgen:latin_char()))).
+
 %%
 %% Utilities
 %%

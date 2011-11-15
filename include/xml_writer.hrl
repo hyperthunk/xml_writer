@@ -25,19 +25,21 @@
 -opaque writer() :: pid() | atom().
 
 %% TODO: it seems there is no way to state that element_name must be non-empty!
--type element_name() :: iodata().
--type ns_name()      :: iodata().
+-type namespace_prefix()    :: binary() | string().
+-type namespace_uri()       :: binary() | string().
+-type element_name()        :: iodata().
+-type ns()                  :: iodata().
 
 -record(stack_frame, {
-    ns_name         :: ns_name(),
-    local_name      :: element_name(),
-    has_attributes  :: boolean(),
-    has_children    :: boolean()
+    ns                      :: ns(),
+    local_name              :: element_name(),
+    has_attributes          :: boolean(),
+    has_children    = false :: boolean()
 }).
 
 -record(writer, {
-    ns          = []        :: list(tuple(string(), string())),
-    ns_stack    = []        :: list(string()),
+    ns          = []        :: list(tuple(namespace_prefix(), namespace_uri())),
+    ns_stack    = []        :: list(namespace_uri()),
     stack       = []        :: [#stack_frame{}],
     quote       = <<"\"">>  :: binary(),
     prettyprint = false     :: boolean(),
