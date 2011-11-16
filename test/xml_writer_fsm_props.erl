@@ -36,7 +36,7 @@
 
 waiting_for_input(_W) ->
     %% TODO: loosen up the type constraints here....
-     [{history,
+     [{waiting_for_input,
          {call, xml_writer, add_namespace,
              [?MODULE, 
                  test_helper:namespace_prefix(),
@@ -49,7 +49,9 @@ waiting_for_input(_W) ->
             [?MODULE, test_helper:valid_latin_string()]}}].
 
 element_started(_W) ->
-    [{waiting_for_input, {call, xml_writer, end_element, [?MODULE]}}].
+    [{waiting_for_input, {call, xml_writer, end_element, [?MODULE]}},
+     {element_started, {call, xml_writer, write_value, 
+        [?MODULE, test_helper:valid_latin_string()]}}].
 
 initial_state() -> waiting_for_input.
 
@@ -61,12 +63,22 @@ next_state_data(_, _, S,
                                                     NS, NSUri}, undefined, S),
     S2;
 next_state_data(waiting_for_input, element_started, S,
-                _Result, {call, xml_writer, start_element, [_, Elem]}) ->
-    S#writer{ stack=[#stack_frame{ local_name=Elem }|S#writer.stack] };
-next_state_data(_From, _Target, StateData, _Result, {call, _, _, _}) ->
-%    ct:pal("From = ~p, Target = ~p, StateData = ~p, Result = ~p, Call = ~p~n",
-%            [From, Target, StateData, Result, Call]),
-    StateData.
+                Result, {call, xml_writer, start_element, [_, Elem]}) ->
+    case Result of
+        ok ->
+            S#writer{ stack=[#stack_frame{ local_name=Elem }|S#writer.stack] };
+        _ ->
+            S
+    end;
+next_state_data(_From, _Target, S, Result, {call, _, end_element, _}) ->
+    case Result of
+        ok ->
+            S#writer{ stack=erlang:tl(S#writer.stack)};
+        _ ->
+            S
+    end;
+next_state_data(_From, _Target, S, _Result, {call, _, _, _}) ->
+    S.
 
 %precondition(waiting_for_input, _, W, {call, _, write_value, _}) ->
 %    true; % length(W#writer.stack) > 0.
@@ -88,8 +100,19 @@ next_state_data(_From, _Target, StateData, _Result, {call, _, _, _}) ->
 %precondition(waiting_for_input, element_started,
 %                S, {call, _, start_element, _}) ->
 %    length(S#writer.stack) > 0;
-precondition(_From, _Target, _StateData, {call ,_,_,_}) ->
-    true.
+precondition(FromState, ToState, S, {call, _, F, _}) ->
+    case FromState of
+        waiting_for_input ->
+            case lists:member(F, [write_value, end_element]) of
+                true ->
+                    length(S#writer.stack) > 0;
+                false ->
+                    %% TODO: tighten this up...
+                    true
+            end;
+        _ ->
+            true
+    end.
 
 postcondition(waiting_for_input, _, _,
                 {call, _, add_namespace, _}, Result) ->
@@ -103,11 +126,11 @@ postcondition(waiting_for_input, _, #writer{stack=[]},
 postcondition(element_started, waiting_for_input,
                 W, {call, _, _, _}, _Result) ->
     length(W#writer.stack) > 0;
-postcondition(_, _, _, _, _) ->
-    true.
+postcondition(_, _, _, _, Result) ->
+    Result =:= ok.
 
-weight(_OldState, _NewState, {call,_, add_namespace, _}) -> 5;
-weight(_, _, _) -> 1.
+% weight(waiting_for_input, _NewState, {call, _, _, _}) -> 5;
+% weight(_, _, _) -> 1.
 
 prop_all_state_transitions_are_valid() ->
     ?FORALL(Cmds, proper_fsm:commands(?MODULE),
@@ -120,8 +143,9 @@ prop_all_state_transitions_are_valid() ->
             proper_fsm:run_commands(?MODULE, Cmds),
         xml_writer:close(Writer),
         ?WHENFAIL(
-           io:format("History: ~w\nState: ~w\nResult: ~w\n",
-                 [History, State, Result]),
+           %io:format("History: ~w\nState: ~w\nResult: ~w\n",
+           %         [History, State, Result]),
+           proper_report:report(Cmds, History, State, Result),
            aggregate(zip(proper_fsm:state_names(History),
                  command_names(Cmds)),
                  Result =:= ok))

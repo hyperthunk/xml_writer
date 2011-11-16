@@ -126,6 +126,10 @@ init([Writer, FormatFun, CloseFun]) ->
 
 waiting_for_input({write_value, _}, _From, W=#writer{ stack=[] }) ->
     {reply, {error, no_root_node}, waiting_for_input, W};
+waiting_for_input({write_value, Val}, _From, W) ->
+    {reply, ok, waiting_for_input, write(Val, W)};
+waiting_for_input(end_element, From, W) ->
+    element_started(end_element, From, W);
 waiting_for_input({start_element, ElementName}, From, W) ->
     NewState = push(ElementName, W),
     gen_fsm:reply(From, ok),
@@ -138,6 +142,8 @@ waiting_for_input({add_namespace, NS, NSUri}, _From,
     },
     {reply, ok, waiting_for_input, NewState}.
 
+element_started({write_value, Val}, _From, W) ->
+    {reply, ok, waiting_for_input, write([?CLOSE_BRACE, Val], W)};
 element_started(end_element, _From, Writer) ->
     {reply, ok, waiting_for_input, pop(Writer)}.
 
@@ -209,8 +215,8 @@ write(Data, Writer=#writer{ write=WriteFun }) when is_function(WriteFun, 1) ->
     case WriteFun(encode(Data, Writer)) of
         ok ->
             Writer;
-        Error -> Error
-            %% exit(Error)
+        Error ->
+            exit(Error)
     end.
 
 encode(Data, #writer{ encoding=undefined }) when is_atom(Data) ->
