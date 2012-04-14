@@ -97,9 +97,6 @@ next_state_data(_From, _Target, S, _Result, {call, _, _, _}) ->
 %        S#storage.grapes > 0
 %    end;
 
-%precondition(waiting_for_input, element_started,
-%                S, {call, _, start_element, _}) ->
-%    length(S#writer.stack) > 0;
 precondition(FromState, ToState, S, {call, _, F, _}) ->
     case FromState of
         waiting_for_input ->
